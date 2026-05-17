@@ -3,6 +3,7 @@
 #include <LoRa.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
+#include <ESP32RotaryEncoder.h>
 
 
 // ============================================================
@@ -23,6 +24,14 @@ LiquidCrystal_I2C lcd(PCF8574_ADDR_A21_A11_A01, 4, 5, 6, 16, 11, 12, 13, 14, POS
 #define RED_LED_PIN    15
 #define YELLOW_LED_PIN  4
 #define GREEN_LED_PIN   16
+
+// Rotary Encoder
+#define ROTARY_CLK_PIN  25
+#define ROTARY_DT_PIN   26
+#define ROTARY_SW_PIN   27
+
+RotaryEncoder rotaryEncoder( ROTARY_CLK_PIN, ROTARY_DT_PIN, ROTARY_SW_PIN );
+
 
 // ============================================================
 // CONFIGURATION
@@ -116,6 +125,20 @@ void onReceive(int packetSize) {
   }
 }
 
+void knobCallback( long value )
+{
+    // This gets executed every time the knob is turned
+
+    Serial.printf( "Value: %i\n", value );
+}
+
+void buttonCallback( unsigned long duration )
+{
+    // This gets executed every time the pushbutton is pressed
+
+    Serial.printf( "boop! button was down for %u ms\n", duration );
+}
+
 void setupLora() {
     LoRa.setPins(LORA_SS, LORA_RST, LORA_DIO0);
     if (!LoRa.begin(433E6)) {
@@ -140,10 +163,34 @@ void setupLeds() {
     digitalWrite(GREEN_LED_PIN, LOW); 
 }
 
+void setupRotaryEncoder() {
+    // This tells the library that the encoder has its own pull-up resistors
+    rotaryEncoder.setEncoderType( EncoderType::HAS_PULLUP );
+
+    // Range of values to be returned by the encoder: minimum is 1, maximum is 10
+    // The third argument specifies whether turning past the minimum/maximum will
+    // wrap around to the other side:
+    //  - true  = turn past 10, wrap to 1; turn past 1, wrap to 10
+    //  - false = turn past 10, stay on 10; turn past 1, stay on 1
+    rotaryEncoder.setBoundaries( 1, 10, true );
+
+    // The function specified here will be called every time the knob is turned
+    // and the current value will be passed to it
+    rotaryEncoder.onTurned( &knobCallback );
+
+    // The function specified here will be called every time the button is pushed and
+    // the duration (in milliseconds) that the button was down will be passed to it
+    rotaryEncoder.onPressed( &buttonCallback );
+
+    // This is where the inputs are configured and the interrupts get attached
+    rotaryEncoder.begin();
+}
+
 void setup() {
     Serial.begin(115200);
     setupLora();
     setupLeds();
+    setupRotaryEncoder();
 
     while (lcd.begin(COLUMS, ROWS, LCD_5x8DOTS) != 1) //colums, rows, characters size
       {
