@@ -1,6 +1,9 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include <LoRa.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
 
 // ============================================================
 // PIN DEFINITIONS
@@ -10,6 +13,11 @@
 #define LORA_SS        5
 #define LORA_RST       14
 #define LORA_DIO0      2
+
+// LCD
+#define COLUMS    20 //LCD columns
+#define ROWS      4  //LCD rows
+LiquidCrystal_I2C lcd(PCF8574_ADDR_A21_A11_A01, 4, 5, 6, 16, 11, 12, 13, 14, POSITIVE);
 
 // ============================================================
 // CONFIGURATION
@@ -37,6 +45,8 @@ void onReceive(int packetSize) {
   byte incomingMsgId = LoRa.read();     // incoming msg ID
   byte incomingLength = LoRa.read();    // incoming msg length
 
+  int xord = 0;
+
   String incoming = "";
 
   while (LoRa.available()) {
@@ -47,6 +57,17 @@ void onReceive(int packetSize) {
     Serial.println("error: message length does not match length");
     return;                             // skip rest of function
   }
+
+  // XOR decryption (symetric)
+  if (recipient != 0xFF) { // if the message is unicast (not broadcast)
+    String decrypted = "";
+    for (int i = 0; i < incoming.length(); i++) {
+      decrypted += (char)(incoming[i] ^ XOR_KEY);
+    }
+    incoming = decrypted;
+
+  }
+
 
   // if the recipient isn't this device or broadcast,
   if (recipient != NODE_ID && recipient != 0xFF) {
@@ -63,6 +84,18 @@ void onReceive(int packetSize) {
   Serial.println("RSSI: " + String(LoRa.packetRssi()));
   Serial.println("Snr: " + String(LoRa.packetSnr()));
   Serial.println();
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("F:" + String(sender, HEX));
+  lcd.print(" T:" + String(recipient, HEX));
+  lcd.print(" ID:" + String(incomingMsgId));
+  lcd.setCursor(0, 1);
+  lcd.print(incoming);
+  lcd.setCursor(0, 3);
+  lcd.print("RSSI: " + String(LoRa.packetRssi()));
+  lcd.print(" Snr: " + String(LoRa.packetSnr()));
+
 }
 
 void setupLora() {
@@ -82,6 +115,17 @@ void setupLora() {
 void setup() {
     Serial.begin(115200);
     setupLora();
+
+    while (lcd.begin(COLUMS, ROWS, LCD_5x8DOTS) != 1) //colums, rows, characters size
+      {
+        Serial.println(F("PCF8574 is not connected or lcd pins declaration is wrong. Only pins numbers: 4,5,6,16,11,12,13,14 are legal."));
+        delay(5000);   
+      }
+
+      lcd.print(F("PCF8574 is OK...")); //(F()) saves string to flash & keeps dynamic memory free
+      delay(2000);
+
+      lcd.clear();
 }
 
 void loop() {
