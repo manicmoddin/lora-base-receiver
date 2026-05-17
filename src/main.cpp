@@ -19,6 +19,11 @@
 #define ROWS      4  //LCD rows
 LiquidCrystal_I2C lcd(PCF8574_ADDR_A21_A11_A01, 4, 5, 6, 16, 11, 12, 13, 14, POSITIVE);
 
+// LEDs
+#define RED_LED_PIN    15
+#define YELLOW_LED_PIN  4
+#define GREEN_LED_PIN   16
+
 // ============================================================
 // CONFIGURATION
 // ============================================================ 
@@ -31,6 +36,9 @@ byte NODE_ID                = 0xAA;
 
 unsigned long lastTransmit = 0;
 unsigned long msgCount = 0;
+bool RED_LED_STATE = LOW;
+bool YELLOW_LED_STATE = LOW;
+bool GREEN_LED_STATE = LOW;
 
 // ============================================================
 // Helpers
@@ -96,6 +104,16 @@ void onReceive(int packetSize) {
   lcd.print("RSSI: " + String(LoRa.packetRssi()));
   lcd.print(" Snr: " + String(LoRa.packetSnr()));
 
+  // LED command from FF
+  if (recipient == 0xFF) {
+    if (incoming == "1") {
+      RED_LED_STATE = HIGH;
+    } 
+    if (incoming == "0") {
+      RED_LED_STATE = LOW;
+    }
+    digitalWrite(RED_LED_PIN, RED_LED_STATE);
+  }
 }
 
 void setupLora() {
@@ -112,9 +130,20 @@ void setupLora() {
     LoRa.receive();
 } 
 
+void setupLeds() {
+    pinMode(RED_LED_PIN, OUTPUT);
+    pinMode(YELLOW_LED_PIN, OUTPUT);
+    pinMode(GREEN_LED_PIN, OUTPUT);
+
+    digitalWrite(RED_LED_PIN, LOW);
+    digitalWrite(YELLOW_LED_PIN, LOW);
+    digitalWrite(GREEN_LED_PIN, LOW); 
+}
+
 void setup() {
     Serial.begin(115200);
     setupLora();
+    setupLeds();
 
     while (lcd.begin(COLUMS, ROWS, LCD_5x8DOTS) != 1) //colums, rows, characters size
       {
