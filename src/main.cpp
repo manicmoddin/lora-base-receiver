@@ -4,6 +4,8 @@
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <ESP32RotaryEncoder.h>
+#include <WiFiManager.h> // https://github.com/tzapu/WiFiManager
+
 
 
 // ============================================================
@@ -32,6 +34,8 @@ LiquidCrystal_I2C lcd(PCF8574_ADDR_A21_A11_A01, 4, 5, 6, 16, 11, 12, 13, 14, POS
 
 RotaryEncoder rotaryEncoder( ROTARY_CLK_PIN, ROTARY_DT_PIN, ROTARY_SW_PIN );
 
+// wifi
+WiFiManager wm;
 
 // ============================================================
 // CONFIGURATION
@@ -186,11 +190,25 @@ void setupRotaryEncoder() {
     rotaryEncoder.begin();
 }
 
+void setupWiFi() {
+    wm.setConfigPortalBlocking(false);
+    wm.setConfigPortalTimeout(60);
+    //automatically connect using saved credentials if they exist
+    //If connection fails it starts an access point with the specified name
+    if(wm.autoConnect("AutoConnectAP")){
+        Serial.println("connected...yeey :)");
+    }
+    else {
+        Serial.println("Configportal running");
+    }
+}
+
 void setup() {
     Serial.begin(115200);
     setupLora();
     setupLeds();
     setupRotaryEncoder();
+    setupWiFi();
 
     while (lcd.begin(COLUMS, ROWS, LCD_5x8DOTS) != 1) //colums, rows, characters size
       {
@@ -205,6 +223,8 @@ void setup() {
 }
 
 void loop() {
+
+    wm.process();
     // Send a packet every 5 seconds
     if (millis() - lastTransmit > 5000) {
         lastTransmit = millis();
@@ -213,4 +233,5 @@ void loop() {
 
     // Check for received packets
     onReceive(LoRa.parsePacket());
+    
 }
