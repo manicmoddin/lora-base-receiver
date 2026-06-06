@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <ArduinoOTA.h>
 #include <SPI.h>
 #include <LoRa.h>
 #include <Wire.h>
@@ -32,7 +33,7 @@ LiquidCrystal_I2C lcd(PCF8574_ADDR_A21_A11_A01, 4, 5, 6, 16, 11, 12, 13, 14, POS
 #define ROTARY_DT_PIN   26
 #define ROTARY_SW_PIN   27
 
-RotaryEncoder rotaryEncoder( ROTARY_CLK_PIN, ROTARY_DT_PIN, ROTARY_SW_PIN );
+RotaryEncoder rotaryEncoder(ROTARY_CLK_PIN, ROTARY_DT_PIN, ROTARY_SW_PIN, -1, 2);
 
 // wifi
 WiFiManager wm;
@@ -41,7 +42,8 @@ WiFiManager wm;
 // CONFIGURATION
 // ============================================================ 
 byte NODE_ID                = 0xAA; 
-#define XOR_KEY                0x6A
+#define XOR_KEY               0x6A
+int scalingFactors[] = {7, 8, 9, 10, 11, 12}; // for SF7 to SF12
 
 // ============================================================
 // STATE MACHINE
@@ -169,7 +171,8 @@ void setupLeds() {
 
 void setupRotaryEncoder() {
     // This tells the library that the encoder has its own pull-up resistors
-    rotaryEncoder.setEncoderType( EncoderType::HAS_PULLUP );
+    rotaryEncoder.setEncoderType( EncoderType::FLOATING );
+    rotaryEncoder.buttonPressed();
 
     // Range of values to be returned by the encoder: minimum is 1, maximum is 10
     // The third argument specifies whether turning past the minimum/maximum will
@@ -192,7 +195,7 @@ void setupRotaryEncoder() {
 
 void setupWiFi() {
     wm.setConfigPortalBlocking(false);
-    wm.setConfigPortalTimeout(60);
+    // wm.setConfigPortalTimeout(900);
     //automatically connect using saved credentials if they exist
     //If connection fails it starts an access point with the specified name
     if(wm.autoConnect("AutoConnectAP")){
@@ -203,12 +206,36 @@ void setupWiFi() {
     }
 }
 
+void setupOTA() {
+    ArduinoOTA.setHostname("ESP32-Gantry");
+    ArduinoOTA.onStart([]() {
+        Serial.println("OTA Update Start");
+    });
+    ArduinoOTA.onEnd([]() {
+        Serial.println("OTA Update End");
+    });
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+        int percentage = (progress / (total /100));
+        Serial.printf("OTA Progress: %u%%\n", percentage);
+    });
+    ArduinoOTA.onError([](ota_error_t error) {
+        Serial.printf("OTA Error[%u]: ", error);
+        if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+        else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+        else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+        else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+        else if (error == OTA_END_ERROR) Serial.println("End Failed");
+    });
+    ArduinoOTA.begin();
+}
+
 void setup() {
     Serial.begin(115200);
     setupLora();
     setupLeds();
     setupRotaryEncoder();
     setupWiFi();
+    setupOTA();
 
     while (lcd.begin(COLUMS, ROWS, LCD_5x8DOTS) != 1) //colums, rows, characters size
       {
@@ -225,6 +252,7 @@ void setup() {
 void loop() {
 
     wm.process();
+    ArduinoOTA.handle();
     // Send a packet every 5 seconds
     if (millis() - lastTransmit > 5000) {
         lastTransmit = millis();
