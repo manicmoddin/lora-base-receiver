@@ -41,7 +41,7 @@ WiFiManager wm;
 // ============================================================
 // CONFIGURATION
 // ============================================================ 
-byte NODE_ID                = 0xAA; 
+byte NODE_ID                = 0x10; 
 #define XOR_KEY               0x6A
 int scalingFactors[] = {7, 8, 9, 10, 11, 12}; // for SF7 to SF12
 
@@ -56,8 +56,63 @@ bool YELLOW_LED_STATE = LOW;
 bool GREEN_LED_STATE = LOW;
 
 // ============================================================
+// MENU & UI STATE
+// ============================================================ 
+enum MenuMode { DISPLAY_HOME, SELECT_ITEM, EDIT_ITEM };
+MenuMode currentMode = DISPLAY_HOME;
+
+int currentMenuIndex = 0; // 0 = SF, 1 = TX Power, 2 = Sync Word, 3 = Node ID
+const int TOTAL_MENU_ITEMS = 4;
+
+// Active settings
+int currentSFIndex = 3;    // Default index for scalingFactors (9) -> SF10
+int currentTxPower = 14;   // Default TX Power (2 to 20)
+int currentSyncWord = 0x12; // Default LoRa sync word (0x12)
+byte currentNodeID = 0x10; // Default Node ID (0x10)
+
+bool updateScreenReq = true; // Flag to trigger screen redraws
+unsigned long menuTimeout = 0; // To return to home screen after inactivity
+
+// ============================================================
 // Helpers
 // ============================================================
+
+void updateBottomMenu() {
+    if (!updateScreenReq) return;
+    updateScreenReq = false; // Reset flag
+
+    lcd.setCursor(0, 3); // Go to the 4th row
+
+    // Create string buffers for our 4 items
+    char sfStr[7];
+    char pwrStr[7];
+    char syncStr[7];
+    char nodeIdStr[7];
+
+    sprintf(sfStr, "SF%d", scalingFactors[currentSFIndex]);
+    sprintf(pwrStr, "P:%d", currentTxPower);
+    sprintf(syncStr, "S:%02X", currentSyncWord);
+    sprintf(nodeIdStr, "N:%02X", currentNodeID);
+    
+
+    // If we are in SELECT mode, wrap the item in brackets [ ]
+    // If we are in EDIT mode, wrap the item in asterisks * * to show it's active
+    if (currentMode == SELECT_ITEM || currentMode == EDIT_ITEM) {
+        char lBrack = (currentMode == EDIT_ITEM) ? '*' : '[';
+        char rBrack = (currentMode == EDIT_ITEM) ? '*' : ']';
+
+        if (currentMenuIndex == 0) sprintf(sfStr, "%cSF%d%c", lBrack, scalingFactors[currentSFIndex], rBrack);
+        if (currentMenuIndex == 1) sprintf(pwrStr, "%cP:%d%c", lBrack, currentTxPower, rBrack);
+        if (currentMenuIndex == 2) sprintf(syncStr, "%cS:%02X%c", lBrack, currentSyncWord, rBrack);
+        if (currentMenuIndex == 3) sprintf(nodeIdStr, "%cN:%02X%c", lBrack, currentNodeID, rBrack);
+    }
+
+    // Print to clean standard 20-character width layout
+    // Format string ensures explicit spacing to prevent old characters hanging around
+    char finalLine[21];
+    snprintf(finalLine, sizeof(finalLine), "%-5s%-5s%-5s%-5s", sfStr, pwrStr, syncStr, nodeIdStr);
+    lcd.print(finalLine);
+}
 
 void onReceive(int packetSize) {
   if (packetSize == 0) return;          // if there's no packet, return
@@ -115,7 +170,7 @@ void onReceive(int packetSize) {
   lcd.print(" ID:" + String(incomingMsgId));
   lcd.setCursor(0, 1);
   lcd.print(incoming);
-  lcd.setCursor(0, 3);
+  lcd.setCursor(0, 2);
   lcd.print("RSSI: " + String(LoRa.packetRssi()));
   lcd.print(" Snr: " + String(LoRa.packetSnr()));
 
@@ -129,21 +184,94 @@ void onReceive(int packetSize) {
     }
     digitalWrite(RED_LED_PIN, RED_LED_STATE);
   }
+  updateScreenReq = true; // Force the bottom line to redraw itself cleanly
 }
 
-void knobCallback( long value )
-{
-    // This gets executed every time the knob is turned
+void knobCallback(long value) {
+    menuTimeout = millis(); // Reset timeout on activity
+    updateScreenReq = true;
 
-    Serial.printf( "Value: %i\n", value );
+    if (currentMode == DISPLAY_HOME) {
+        // First turn wakes up the menu selection
+        currentMode = SELECT_ITEM;
+        rotaryEncoder.setBoundaries(0, TOTAL_MENU_ITEMS - 1, true);
+        rotaryEncoder.setEncoderValue(currentMenuIndex);
+    }
+    else if (currentMode == SELECT_ITEM) {
+        currentMenuIndex = value;
+    }
+    else if (currentMode == EDIT_ITEM) {
+        // We are modifying a specific value
+        if (currentMenuIndex == 0) { // Editing SF
+            currentSFIndex = value;
+        } else if (currentMenuIndex == 1) { // Editing TX Power
+            currentTxPower = value;
+        } else if (currentMenuIndex == 2) { // Editing Sync Word
+            currentSyncWord = value;
+        } else if (currentMenuIndex == 3) { // Editing Node ID
+            currentNodeID = (byte)value;
+        }
+    }
 }
 
-void buttonCallback( unsigned long duration )
-{
-    // This gets executed every time the pushbutton is pressed
+void buttonCallback(unsigned long duration) {
+    menuTimeout = millis();
+    updateScreenReq = true;
 
-    Serial.printf( "boop! button was down for %u ms\n", duration );
+    if (currentMode == DISPLAY_HOME) {
+        // Pressing button on home screen enters selection mode
+        currentMode = SELECT_ITEM;
+        rotaryEncoder.setBoundaries(0, TOTAL_MENU_ITEMS - 1, true);
+        rotaryEncoder.setEncoderValue(currentMenuIndex);
+    }
+    else if (currentMode == SELECT_ITEM) {
+        // Selected an item! Switch to EDIT mode and update boundaries for that item
+        currentMode = EDIT_ITEM;
+        if (currentMenuIndex == 0) {
+            // SF Array size is 6 (indexes 0 to 5)
+            rotaryEncoder.setBoundaries(0, 5, false); 
+            rotaryEncoder.setEncoderValue(currentSFIndex);
+        } else if (currentMenuIndex == 1) {
+            // TX Power range: 2dBm to 20dBm
+            rotaryEncoder.setBoundaries(2, 20, false);
+            rotaryEncoder.setEncoderValue(currentTxPower);
+        } else if (currentMenuIndex == 2) {
+            // Sync Word range: 0x00 to 0xFF (0 to 255)
+            rotaryEncoder.setBoundaries(0, 255, false);
+            rotaryEncoder.setEncoderValue(currentSyncWord);
+        } else if (currentMenuIndex == 3) {
+            // Node ID range: 0x00 to 0xFF (0 to 254)
+            rotaryEncoder.setBoundaries(0, 254, false);
+            rotaryEncoder.setEncoderValue(currentNodeID);
+        }
+    }
+    else if (currentMode == EDIT_ITEM) {
+        // Pressed again while editing -> Save settings and go back to selection
+        
+        // Apply the settings directly to the LoRa radio:
+        if (currentMenuIndex == 0) {
+            LoRa.setSpreadingFactor(scalingFactors[currentSFIndex]);
+            Serial.println("Spreading Factor set to SF" + String(scalingFactors[currentSFIndex]));
+        } else if (currentMenuIndex == 1) {
+            LoRa.setTxPower(currentTxPower);
+            Serial.println("TX Power set to " + String(currentTxPower) + " dBm");
+        } else if (currentMenuIndex == 2) {
+            LoRa.setSyncWord(currentSyncWord);
+            Serial.println("Sync Word set to 0x" + String(currentSyncWord, HEX));
+        } else if (currentMenuIndex == 3) {
+            // Node ID is used in our code logic but not a LoRa setting, so just print it
+            NODE_ID = currentNodeID;
+            Serial.println("Node ID set to 0x" + String(currentNodeID, HEX));
+        }
+                
+        // Drop back down to item selection mode
+        currentMode = SELECT_ITEM;
+        rotaryEncoder.setBoundaries(0, TOTAL_MENU_ITEMS - 1, true);
+        rotaryEncoder.setEncoderValue(currentMenuIndex);
+    }
 }
+
+
 
 void setupLora() {
     LoRa.setPins(LORA_SS, LORA_RST, LORA_DIO0);
@@ -253,10 +381,14 @@ void loop() {
 
     wm.process();
     ArduinoOTA.handle();
+
+    // Refresh the bottom menu if adjustments were made
+    updateBottomMenu();
+
     // Send a packet every 5 seconds
     if (millis() - lastTransmit > 5000) {
         lastTransmit = millis();
-        // sendPacket();  
+        //sendPacket();  
     }
 
     // Check for received packets
