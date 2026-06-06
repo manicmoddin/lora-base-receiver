@@ -6,6 +6,8 @@
 #include <LiquidCrystal_I2C.h>
 #include <ESP32RotaryEncoder.h>
 #include <WiFiManager.h> // https://github.com/tzapu/WiFiManager
+#include <FS.h>
+#include <SD.h>
 
 
 
@@ -34,6 +36,10 @@ LiquidCrystal_I2C lcd(PCF8574_ADDR_A21_A11_A01, 4, 5, 6, 16, 11, 12, 13, 14, POS
 #define ROTARY_SW_PIN   27
 
 RotaryEncoder rotaryEncoder(ROTARY_CLK_PIN, ROTARY_DT_PIN, ROTARY_SW_PIN, -1, 2);
+
+// SD Card
+#define SD_CS_PIN  17
+bool sdCardPresent = false;
 
 // wifi
 WiFiManager wm;
@@ -173,6 +179,17 @@ void onReceive(int packetSize) {
   lcd.setCursor(0, 2);
   lcd.print("RSSI: " + String(LoRa.packetRssi()));
   lcd.print(" Snr: " + String(LoRa.packetSnr()));
+
+  if(sdCardPresent == true){
+    String logEntry = "From: 0x" + String(sender, HEX) + ", To: 0x" + String(recipient, HEX) + ", ID: " + String(incomingMsgId) + ", RSSI: " + String(LoRa.packetRssi()) + ", Snr: " + String(LoRa.packetSnr()) + ", Msg: " + incoming;
+    File logFile = SD.open("/lora_log.txt", FILE_APPEND);
+    if (logFile) {
+      logFile.println(logEntry);
+      logFile.close();
+    } else {
+      Serial.println("Error opening log file for writing.");
+    }
+  }
 
   // LED command from FF
   if (recipient == 0xFF) {
@@ -357,6 +374,35 @@ void setupOTA() {
     ArduinoOTA.begin();
 }
 
+void setupSDCard() {
+    if(!SD.begin(SD_CS_PIN)){
+    Serial.println("Card Mount Failed");
+    return;
+  }
+  uint8_t cardType = SD.cardType();
+
+  if(cardType == CARD_NONE){
+    Serial.println("No SD card attached");
+    return;
+  }
+
+  Serial.print("SD Card Type: ");
+  if(cardType == CARD_MMC){
+    Serial.println("MMC");
+  } else if(cardType == CARD_SD){
+    Serial.println("SDSC");
+  } else if(cardType == CARD_SDHC){
+    Serial.println("SDHC");
+  } else {
+    Serial.println("UNKNOWN");
+  }
+
+  sdCardPresent = true;
+
+  uint64_t cardSize = SD.cardSize() / (1024 * 1024);
+  Serial.printf("SD Card Size: %lluMB\n", cardSize);
+}
+
 void setup() {
     Serial.begin(115200);
     setupLora();
@@ -364,6 +410,7 @@ void setup() {
     setupRotaryEncoder();
     setupWiFi();
     setupOTA();
+    setupSDCard();
 
     while (lcd.begin(COLUMS, ROWS, LCD_5x8DOTS) != 1) //colums, rows, characters size
       {
