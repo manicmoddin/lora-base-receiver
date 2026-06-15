@@ -398,6 +398,53 @@ void sendPacket() {
     digitalWrite(YELLOW_LED_PIN, LOW); 
 }
 
+void processGPS() {
+    // 1. READ GPS SERIAL CONSTANTLY (Prevents buffer overflow)
+    while (gpsSerial.available() > 0) {
+        gps.encode(gpsSerial.read());
+    }
+
+    // 2. EVALUATE FIX STATUS & CONTROL GREEN LED
+    // TinyGPS+ location.isValid() ensures we have a true 2D/3D satellite fix
+    if (gps.location.isValid() && gps.location.age() < 2000) {
+        gpsState.lat = gps.location.lat();
+        gpsState.lon = gps.location.lng();
+        gpsState.alt = gps.altitude.meters();
+        gpsState.sats = gps.satellites.value();
+        gpsState.hdop = gps.hdop.value() / 100.0;
+        gpsState.valid = true;
+        gpsState.speed = gps.speed.mph(); // Update speed to ensure it's current
+        gpsState.course = gps.course.value(); // Update course to ensure it's current
+        gpsState.date = gps.date.value(); // Update date to ensure it's current
+        gpsState.time = gps.time.value(); // Update time to ensure it's current
+
+        digitalWrite(GREEN_LED_PIN, HIGH); // Steady light indicating active fix
+    } else {
+        gpsState.valid = false;
+        digitalWrite(GREEN_LED_PIN, LOW);  // Turn off if fix is lost or stale
+    }
+
+    // 3. OPTIONAL: THROTTLE SERIAL LOGGING FOR DEBUGGING (Every 2 seconds)
+    if (gpsState.valid && (millis() - lastGPSPrint > 2000)) {
+        lastGPSPrint = millis();
+        Serial.printf("Valid Fix! Sats: %d, Lat: %.5f, Lon: %.5f, HDOP: %.2f\n", 
+                    gpsState.sats, gpsState.lat, gpsState.lon, gpsState.hdop);
+    }
+
+    // 4. TRANSMIT PACKET TIMER (Every 5 seconds - ONLY WITH VALID FIX)
+    if (gpsState.valid && (millis() - lastTransmit > 5000)) {
+        lastTransmit = millis();
+        sendPacket(); 
+    }
+
+    // 5. MENU SYSTEMS & TIMEOUTS
+    updateBottomMenu();
+
+    if ((currentMode == SELECT_ITEM || currentMode == EDIT_ITEM) && millis() - menuTimeout > 30000) {
+        currentMode = DISPLAY_HOME;
+        updateScreenReq = true;
+    }
+}
 
 
 void setupLora() {
@@ -541,53 +588,6 @@ void loop() {
 
     wm.process();
     ArduinoOTA.handle();
-
-    // 1. READ GPS SERIAL CONSTANTLY (Prevents buffer overflow)
-    while (gpsSerial.available() > 0) {
-        gps.encode(gpsSerial.read());
-    }
-
-    // 2. EVALUATE FIX STATUS & CONTROL GREEN LED
-    // TinyGPS+ location.isValid() ensures we have a true 2D/3D satellite fix
-    if (gps.location.isValid() && gps.location.age() < 2000) {
-        gpsState.lat = gps.location.lat();
-        gpsState.lon = gps.location.lng();
-        gpsState.alt = gps.altitude.meters();
-        gpsState.sats = gps.satellites.value();
-        gpsState.hdop = gps.hdop.value() / 100.0;
-        gpsState.valid = true;
-        gpsState.speed = gps.speed.mph(); // Update speed to ensure it's current
-        gpsState.course = gps.course.value(); // Update course to ensure it's current
-        gpsState.date = gps.date.value(); // Update date to ensure it's current
-        gpsState.time = gps.time.value(); // Update time to ensure it's current
-
-        digitalWrite(GREEN_LED_PIN, HIGH); // Steady light indicating active fix
-    } else {
-        gpsState.valid = false;
-        digitalWrite(GREEN_LED_PIN, LOW);  // Turn off if fix is lost or stale
-    }
-
-    // 3. OPTIONAL: THROTTLE SERIAL LOGGING FOR DEBUGGING (Every 2 seconds)
-    if (gpsState.valid && (millis() - lastGPSPrint > 2000)) {
-        lastGPSPrint = millis();
-        Serial.printf("Valid Fix! Sats: %d, Lat: %.5f, Lon: %.5f, HDOP: %.2f\n", 
-                      gpsState.sats, gpsState.lat, gpsState.lon, gpsState.hdop);
-    }
-
-    // 4. TRANSMIT PACKET TIMER (Every 5 seconds - ONLY WITH VALID FIX)
-    if (gpsState.valid && (millis() - lastTransmit > 5000)) {
-        lastTransmit = millis();
-        sendPacket(); 
-    }
-
-    // 5. MENU SYSTEMS & TIMEOUTS
-    updateBottomMenu();
-
-    if ((currentMode == SELECT_ITEM || currentMode == EDIT_ITEM) && millis() - menuTimeout > 30000) {
-        currentMode = DISPLAY_HOME;
-        updateScreenReq = true;
-    }
-    
-    // 6. CHECK FOR INCOMING PACKETS
+    processGPS();
     onReceive(LoRa.parsePacket());
 }
