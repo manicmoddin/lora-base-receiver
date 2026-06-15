@@ -8,6 +8,7 @@
 #include <WiFiManager.h> // https://github.com/tzapu/WiFiManager
 #include <FS.h>
 #include <SD.h>
+#include <TinyGPSPlus.h>
 
 
 
@@ -28,7 +29,7 @@ LiquidCrystal_I2C lcd(PCF8574_ADDR_A21_A11_A01, 4, 5, 6, 16, 11, 12, 13, 14, POS
 // LEDs
 #define RED_LED_PIN    15
 #define YELLOW_LED_PIN  4
-#define GREEN_LED_PIN   16
+#define GREEN_LED_PIN   33
 
 // Rotary Encoder
 #define ROTARY_CLK_PIN  25
@@ -38,8 +39,40 @@ LiquidCrystal_I2C lcd(PCF8574_ADDR_A21_A11_A01, 4, 5, 6, 16, 11, 12, 13, 14, POS
 RotaryEncoder rotaryEncoder(ROTARY_CLK_PIN, ROTARY_DT_PIN, ROTARY_SW_PIN, -1, 2);
 
 // SD Card
-#define SD_CS_PIN  17
+#define SD_CS_PIN  32
 bool sdCardPresent = false;
+
+// GPS
+#define GPS_RX_PIN 16
+#define GPS_TX_PIN 17
+#define GPS_BAUD_RATE 9600
+TinyGPSPlus gps;
+
+HardwareSerial gpsSerial(2); // Use UART2 for GPS
+
+unsigned long lastTransmit = 0;
+unsigned long lastGPSFix = 0;
+
+// ============================================================
+// GPS STATE
+// ============================================================
+
+struct GPSState {
+    float lat;
+    float lon;
+    float alt;
+    int sats;
+    float hdop;
+    float speed;
+    float course;
+    uint32_t date;
+    uint32_t time;
+    bool valid;
+};
+
+GPSState gpsState = {0.0, 0.0, 0.0, 0, 99.9, 0.0, 0.0, 0, 0, false};
+
+unsigned long lastGPSPrint = 0;  // Throttles serial print outputs
 
 // wifi
 WiFiManager wm;
@@ -47,7 +80,8 @@ WiFiManager wm;
 // ============================================================
 // CONFIGURATION
 // ============================================================ 
-byte NODE_ID                = 0x10; 
+byte NODE_ID                = 0x10;
+byte BASE_ID                = 0xAA; 
 #define XOR_KEY               0x6A
 int scalingFactors[] = {7, 8, 9, 10, 11, 12}; // for SF7 to SF12
 
@@ -55,7 +89,6 @@ int scalingFactors[] = {7, 8, 9, 10, 11, 12}; // for SF7 to SF12
 // STATE MACHINE
 // ============================================================ 
 
-unsigned long lastTransmit = 0;
 unsigned long msgCount = 0;
 bool RED_LED_STATE = LOW;
 bool YELLOW_LED_STATE = LOW;
@@ -78,7 +111,6 @@ byte currentNodeID = 0x10; // Default Node ID (0x10)
 
 bool updateScreenReq = true; // Flag to trigger screen redraws
 unsigned long menuTimeout = 0; // To return to home screen after inactivity
-
 // ============================================================
 // Helpers
 // ============================================================
@@ -288,6 +320,84 @@ void buttonCallback(unsigned long duration) {
     }
 }
 
+// ============================================================
+// LOG GPS DATA TO SD CARD
+// ============================================================
+void logGPSData(unsigned long msgCount = 0) {
+    if (!sdCardPresent) return;
+
+    String logEntry = String(msgCount) + "," + 
+                      String(gpsState.lat, 5) + "," +
+                      String(gpsState.lon, 5) + "," +
+                      String(gpsState.alt, 1) + "," +
+                      String(gpsState.sats) + "," +
+                      String(gpsState.hdop, 1) + "," +
+                      String(gpsState.speed, 1) + "," +
+                      String(gpsState.course, 1) + "," +
+                      String(gpsState.date) + "," +
+                      String(gpsState.time);
+
+    File logFile = SD.open("/gps_log.txt", FILE_APPEND);
+    if (logFile) {
+        logFile.println(logEntry);
+        logFile.close();
+    } else {
+        Serial.println("Error opening GPS log file for writing.");
+    }
+}
+
+
+// ============================================================
+// SEND PACKET
+// ============================================================
+
+void sendPacket() {
+    digitalWrite(YELLOW_LED_PIN, HIGH); // Status indicator for outbound packet
+
+    char payload[96];
+    char encrypted[96];
+    unsigned long uptimeSeconds = millis() / 1000UL;
+
+    // Construct comma-delimited data payload
+    String payloadStr =
+        String(msgCount) + "," +
+        String(gpsState.lat, 5) + "," +
+        String(gpsState.lon, 5) + "," +
+        String(gpsState.alt, 1) + "," +
+        String(gpsState.sats) + "," +
+        String(gpsState.hdop, 1) + "," +
+        String(gpsState.speed, 1) + "," +
+        String(gpsState.course, 1) + "," +
+        String(gpsState.date) + "," +
+        String(gpsState.time) + "," +
+        String(uptimeSeconds);
+
+    payloadStr.toCharArray(payload, sizeof(payload));
+
+    Serial.print(F("TX: ")); Serial.println(payload);
+
+    // Apply symmetric XOR Encryption
+    strncpy(encrypted, payload, sizeof(encrypted));
+    for (size_t i = 0; i < strlen(encrypted); i++) {
+        encrypted[i] ^= XOR_KEY;
+    }
+    uint8_t payloadLen = strlen(encrypted);
+
+    // Broadcast construction
+    LoRa.beginPacket();
+    LoRa.write(BASE_ID);
+    LoRa.write(NODE_ID);
+    LoRa.write(msgCount);
+    LoRa.write(payloadLen);
+    LoRa.write((uint8_t*)encrypted, payloadLen);
+    LoRa.endPacket();
+
+    logGPSData(msgCount); // Log GPS data to SD card if present
+
+    msgCount++;
+    digitalWrite(YELLOW_LED_PIN, LOW); 
+}
+
 
 
 void setupLora() {
@@ -405,6 +515,9 @@ void setupSDCard() {
 
 void setup() {
     Serial.begin(115200);
+    // Start Serial 2 with the defined RX and TX pins and a baud rate of 9600
+    gpsSerial.begin(GPS_BAUD_RATE, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
+    Serial.println("Serial 2 started at 9600 baud rate");
     setupLora();
     setupLeds();
     setupRotaryEncoder();
@@ -429,16 +542,52 @@ void loop() {
     wm.process();
     ArduinoOTA.handle();
 
-    // Refresh the bottom menu if adjustments were made
-    updateBottomMenu();
-
-    // Send a packet every 5 seconds
-    if (millis() - lastTransmit > 5000) {
-        lastTransmit = millis();
-        //sendPacket();  
+    // 1. READ GPS SERIAL CONSTANTLY (Prevents buffer overflow)
+    while (gpsSerial.available() > 0) {
+        gps.encode(gpsSerial.read());
     }
 
-    // Check for received packets
-    onReceive(LoRa.parsePacket());
+    // 2. EVALUATE FIX STATUS & CONTROL GREEN LED
+    // TinyGPS+ location.isValid() ensures we have a true 2D/3D satellite fix
+    if (gps.location.isValid() && gps.location.age() < 2000) {
+        gpsState.lat = gps.location.lat();
+        gpsState.lon = gps.location.lng();
+        gpsState.alt = gps.altitude.meters();
+        gpsState.sats = gps.satellites.value();
+        gpsState.hdop = gps.hdop.value() / 100.0;
+        gpsState.valid = true;
+        gpsState.speed = gps.speed.mph(); // Update speed to ensure it's current
+        gpsState.course = gps.course.value(); // Update course to ensure it's current
+        gpsState.date = gps.date.value(); // Update date to ensure it's current
+        gpsState.time = gps.time.value(); // Update time to ensure it's current
+
+        digitalWrite(GREEN_LED_PIN, HIGH); // Steady light indicating active fix
+    } else {
+        gpsState.valid = false;
+        digitalWrite(GREEN_LED_PIN, LOW);  // Turn off if fix is lost or stale
+    }
+
+    // 3. OPTIONAL: THROTTLE SERIAL LOGGING FOR DEBUGGING (Every 2 seconds)
+    if (gpsState.valid && (millis() - lastGPSPrint > 2000)) {
+        lastGPSPrint = millis();
+        Serial.printf("Valid Fix! Sats: %d, Lat: %.5f, Lon: %.5f, HDOP: %.2f\n", 
+                      gpsState.sats, gpsState.lat, gpsState.lon, gpsState.hdop);
+    }
+
+    // 4. TRANSMIT PACKET TIMER (Every 5 seconds - ONLY WITH VALID FIX)
+    if (gpsState.valid && (millis() - lastTransmit > 5000)) {
+        lastTransmit = millis();
+        sendPacket(); 
+    }
+
+    // 5. MENU SYSTEMS & TIMEOUTS
+    updateBottomMenu();
+
+    if ((currentMode == SELECT_ITEM || currentMode == EDIT_ITEM) && millis() - menuTimeout > 30000) {
+        currentMode = DISPLAY_HOME;
+        updateScreenReq = true;
+    }
     
+    // 6. CHECK FOR INCOMING PACKETS
+    onReceive(LoRa.parsePacket());
 }
