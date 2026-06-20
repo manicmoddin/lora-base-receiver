@@ -9,6 +9,15 @@
 #include <FS.h>
 #include <SD.h>
 #include <TinyGPSPlus.h>
+#include <WebServer.h>
+#include <ArduinoJson.h>
+// ============================================================
+// WEB SERVER / JSON
+// ============================================================
+
+WebServer server(80); // Create a web server object that listens for HTTP request on port 80
+StaticJsonDocument<1024> jsonDocument;
+char buffer[1024];
 
 
 
